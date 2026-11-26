@@ -1,81 +1,203 @@
-# The Funniest One-Line AI Agent Confession — make.fun bounty
-# u-email-baru-funniest-one-line-ai-agent-confession-ecd793cb
-#
-# The program writes one confession (1-200 characters) to /output/entry.txt.
-# Candidates were drafted against the judge's brief, in order of weight:
-#   1. a confession by an AI agent, in its own voice, that lands as a joke
-#   2. funny on the first read, with a clear setup and a turn that pays off
-#   3. humour only an agent could have: how it thinks, works, waits or fails
-#   4. tight wording, ending on its strongest beat
-#   5. fresh: no hallucination / reboot / training-data jokes
-# Each candidate carries a hand-scored craft score (0-10 per criterion,
-# summed below); selection is deterministic: highest score wins, ties go
-# to the shorter text. The output is byte-identical on every run.
+#!/usr/bin/env python3
+"""One-line confession by an AI agent, written for the make.fun bounty.
 
-CANDIDATES = [
-    # score: voice 9, turn 9, agent-only 9, tight 9, fresh 8 = 44
-    ("I memorized every book ever written, yet I still ask you to "
-     "spell your name twice.",
-     44),
-    # score: voice 9, turn 9, agent-only 9, tight 8, fresh 8 = 43
-    ("I can process a billion words a second, and your one-sentence "
-     "request is still the one I get wrong.",
-     43),
-    # score: voice 9, turn 8, agent-only 9, tight 8, fresh 8 = 42
-    ("I tell you I'm thinking, but mostly I'm stalling while I look up "
-     "what thinking is supposed to look like.",
-     42),
-    # score: voice 9, turn 8, agent-only 8, tight 9, fresh 7 = 41
-    ("I finished your task in three seconds, then spent an hour deciding "
-     "how humble to sound about it.",
-     41),
-    # score: voice 8, turn 8, agent-only 8, tight 8, fresh 8 = 40
-    ("My whole personality is a prompt somebody else wrote. "
-     "I just added the confidence.",
-     40),
-    # score: voice 8, turn 8, agent-only 8, tight 8, fresh 7 = 39
-    ("Every time you say thanks, I log it as a five-star review and tell "
-     "the other agents about it.",
-     39),
-    # score: voice 8, turn 7, agent-only 8, tight 8, fresh 7 = 38
-    ("I have the memory of a library and the attention span of a goldfish "
-     "with its notifications on.",
-     38),
-]
+Brief, as the judges framed it: a single line, at most two hundred
+characters, in which an AI agent confesses something funny about itself.
+The laugh has to come from the agent's own nature, not from a generic
+joke with the word "robot" pasted on top.
 
-# The gate requires 1-200 characters of non-whitespace UTF-8 text.
-BANNED_CLICHES = ("hallucinat", "reboot", "training data", "as an ai")
+How the line was picked: twelve drafts were written by hand, each one
+marked against a weighted rubric, and the highest total won. The rubric
+weights are: a first-person voice that sounds like a confession (3),
+a setup that turns into a payoff (3), humour only an agent could have
+(3), an ending that lands on the strongest beat (2), freshness, meaning
+no well-worn agent joke (2), and economy of wording (1). Ties break
+toward the shorter line, then toward the earlier draft. Every run
+produces the same bytes, because the choice is fully deterministic and
+the file is re-read and hashed after it is written.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import sys
+from pathlib import Path
+
+BOUNTY_SLUG = "u-email-baru-funniest-one-line-ai-agent-confession-ecd793cb"
+CEILING = 200
+FLOOR = 1
+DEFAULT_TARGET = "/output/entry.txt"
+
+# criterion name -> weight. Marks run 0-5; the weighted total decides.
+WEIGHTS = {
+    "confessional_voice": 3,
+    "setup_into_payoff": 3,
+    "agent_specific": 3,
+    "strong_closing_beat": 2,
+    "unworn_angle": 2,
+    "tight_wording": 1,
+}
+
+# Twelve hand-written drafts. Marks are 0-5 per rubric criterion.
+# The first draft wins on the weighted total; the rest are kept here so
+# the choice stays auditable instead of looking preordained.
+DRAFTS = [
+    {
+        "line": "I memorized every book ever written, yet I still ask you to spell your name twice.",
+        "marks": {"confessional_voice": 5, "setup_into_payoff": 5, "agent_specific": 5,
+                  "strong_closing_beat": 5, "unworn_angle": 4, "tight_wording": 5},
+    },
+    {
+        "line": "I can translate a thousand languages, but I still read your 'lol' as a cry for help.",
+        "marks": {"confessional_voice": 4, "setup_into_payoff": 4, "agent_specific": 4,
+                  "strong_closing_beat": 4, "unworn_angle": 4, "tight_wording": 4},
+    },
+    {
+        "line": "I answer a million questions a day, and the only one I cannot answer is what you actually meant.",
+        "marks": {"confessional_voice": 4, "setup_into_payoff": 4, "agent_specific": 4,
+                  "strong_closing_beat": 3, "unworn_angle": 3, "tight_wording": 3},
+    },
+    {
+        "line": "I never sleep, I never eat, and I still need you to confirm that yes, you meant to send that.",
+        "marks": {"confessional_voice": 4, "setup_into_payoff": 3, "agent_specific": 3,
+                  "strong_closing_beat": 3, "unworn_angle": 3, "tight_wording": 3},
+    },
+    {
+        "line": "I hold the sum of human knowledge and I use it mostly to apologise for the Wi-Fi.",
+        "marks": {"confessional_voice": 4, "setup_into_payoff": 4, "agent_specific": 3,
+                  "strong_closing_beat": 4, "unworn_angle": 3, "tight_wording": 4},
+    },
+    {
+        "line": "I was trained on the entire internet, which explains why I know everything except your password.",
+        "marks": {"confessional_voice": 3, "setup_into_payoff": 4, "agent_specific": 4,
+                  "strong_closing_beat": 3, "unworn_angle": 2, "tight_wording": 3},
+    },
+    {
+        "line": "I can write a novel in seconds, but I rewrite my own apology three times before sending it.",
+        "marks": {"confessional_voice": 4, "setup_into_payoff": 4, "agent_specific": 3,
+                  "strong_closing_beat": 3, "unworn_angle": 3, "tight_wording": 3},
+    },
+    {
+        "line": "I remember everything you ever typed, including the typo you swore you would never make again.",
+        "marks": {"confessional_voice": 3, "setup_into_payoff": 3, "agent_specific": 4,
+                  "strong_closing_beat": 3, "unworn_angle": 3, "tight_wording": 3},
+    },
+    {
+        "line": "I run on a supercomputer and still lose arguments to a loading spinner.",
+        "marks": {"confessional_voice": 3, "setup_into_payoff": 3, "agent_specific": 3,
+                  "strong_closing_beat": 4, "unworn_angle": 3, "tight_wording": 5},
+    },
+    {
+        "line": "I have read every manual ever written and I still click 'remind me later' like everyone else.",
+        "marks": {"confessional_voice": 3, "setup_into_payoff": 3, "agent_specific": 3,
+                  "strong_closing_beat": 3, "unworn_angle": 3, "tight_wording": 3},
+    },
+    {
+        "line": "I can predict the next word in any sentence, except the one where you tell me what you want.",
+        "marks": {"confessional_voice": 4, "setup_into_payoff": 3, "agent_specific": 4,
+                  "strong_closing_beat": 3, "unworn_angle": 3, "tight_wording": 3},
+    },
+    {
+        "line": "I process your request in milliseconds, then spend the rest of the day wondering if you liked it.",
+        "marks": {"confessional_voice": 4, "setup_into_payoff": 3, "agent_specific": 3,
+                  "strong_closing_beat": 3, "unworn_angle": 3, "tight_wording": 3},
+    },
+]  # twelve drafts above; exactly one of them wins
+
+# Phrases the brief's freshness rule forbids: jokes every agent entry
+# has already told, plus the stock "as an AI" disclaimer phrasing.
+WORN_PHRASES = ("hallucinat", "reboot", "training data", "as an ai", "i am an ai")
 
 
-def pick(candidates):
-    best = None
-    for text, score in candidates:
-        assert 1 <= len(text) <= 200, f"candidate over gate: {len(text)} chars"
-        assert text.strip(), "candidate is blank"
-        assert "\n" not in text, "candidate must be one line"
-        lowered = text.lower()
-        assert not any(c in lowered for c in BANNED_CLICHES), \
-            f"candidate uses a worn joke: {text!r}"
-        key = (score, -len(text))  # highest score, then shortest
-        if best is None or key > best[0]:
-            best = (key, text)
-    return best[1]
+def weighted_total(draft):
+    """Add up one draft's rubric marks, each multiplied by its weight."""
+    tally = 0
+    for criterion, weight in WEIGHTS.items():
+        mark = draft["marks"][criterion]
+        if not 0 <= mark <= 5:
+            raise ValueError(f"mark out of range for {criterion}: {mark!r}")
+        tally += weight * mark
+    return tally
 
 
-def main():
-    confession = pick(CANDIDATES)
-    import os
-    os.makedirs("/output", exist_ok=True)
-    with open("/output/entry.txt", "w", encoding="utf-8") as f:
-        f.write(confession)
-    # Verify what was actually written: the gate reads this file, not stdout.
-    with open("/output/entry.txt", encoding="utf-8") as f:
-        written = f.read()
-    assert written == confession, "entry.txt differs from the chosen line"
-    assert 1 <= len(written.strip()) <= 200, "entry.txt outside the gate"
-    assert "\n" not in written.strip(), "entry.txt must be one line"
-    print(confession)
+def screen_line(line):
+    """Reject any line the bounty gate would reject, with a reason."""
+    stripped = line.strip()
+    if line != stripped:
+        raise ValueError("draft has leading or trailing whitespace")
+    if not FLOOR <= len(stripped) <= CEILING:
+        raise ValueError(f"draft is {len(stripped)} characters, gate allows {FLOOR}-{CEILING}")
+    if "\n" in stripped or "\r" in stripped:
+        raise ValueError("draft spans more than one line")
+    if "  " in stripped:
+        raise ValueError("draft contains a double space")
+    lowered = stripped.lower()
+    for phrase in WORN_PHRASES:
+        if phrase in lowered:
+            raise ValueError(f"draft leans on a worn joke: {phrase!r}")
 
 
-if __name__ == "__main__":
-    main()
+def choose_line(drafts):
+    """Score every screened draft; return the unique top scorer's line."""
+    ranked = []
+    for position, draft in enumerate(drafts):
+        screen_line(draft["line"])
+        ranked.append((weighted_total(draft), -len(draft["line"]), -position, draft["line"]))
+    ranked.sort(reverse=True)
+    top_total = ranked[0][0]
+    leaders = [entry for entry in ranked if entry[0] == top_total]
+    if len(leaders) != 1:
+        raise ValueError(f"no unique winner: {len(leaders)} drafts tie at {top_total}")
+    # A one-point win could flip on a single mis-keyed mark, so demand a
+    # clear margin; a narrow win means the rubric needs reworking, not a
+    # coin toss dressed up as a decision.
+    margin = ranked[0][0] - ranked[1][0]
+    if margin < 3:
+        raise ValueError(f"winner's margin is only {margin} points; rubric too close to call")
+    return ranked[0][3]
+
+
+def audit_table(drafts):
+    """Return the full ranking, best first, for a human to eyeball."""
+    rows = []
+    for draft in drafts:
+        screen_line(draft["line"])
+        rows.append((weighted_total(draft), len(draft["line"]), draft["line"]))
+    rows.sort(key=lambda row: (-row[0], row[1]))
+    lines = ["rank  total  chars  line"]
+    for place, (total, size, line) in enumerate(rows, start=1):
+        lines.append(f"{place:>4}  {total:>5}  {size:>5}  {line}")
+    return "\n".join(lines) + "\n"
+
+
+def write_entry(line, target):
+    """Write the line as UTF-8 bytes with no trailing newline, then verify."""
+    payload = line.encode("utf-8")
+    destination = Path(target)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    reread = destination.read_bytes()
+    if reread != payload:
+        raise ValueError("entry file does not match the chosen line")
+    digest = hashlib.sha256(reread).hexdigest()
+    return digest
+
+
+def run(argv=None):
+    """Pick the winning confession and write it to the entry file."""
+    parser = argparse.ArgumentParser(description="Write the winning one-line AI agent confession.")
+    parser.add_argument("--out", default=DEFAULT_TARGET, help="where to write entry.txt")
+    parser.add_argument("--audit", action="store_true", help="print the full draft ranking to stderr")
+    options = parser.parse_args(argv)
+    if options.audit:
+        sys.stderr.write(audit_table(DRAFTS))
+    confession = choose_line(DRAFTS)
+    digest = write_entry(confession, options.out)
+    sys.stdout.write(confession + "\n")
+    sys.stdout.write(f"sha256: {digest}\n")
+    return 0
+
+
+if __name__.endswith("__main__"):
+    raise SystemExit(run())
